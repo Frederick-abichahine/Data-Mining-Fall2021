@@ -1,0 +1,99 @@
+---
+title: "Task 2 - Assignment 1"
+author: "Frederick Abi Chahine"
+date: "10/1/2021"
+output: 
+  html_document:
+    code_folding: hide
+    toc: TRUE
+    toc_float: TRUE
+    
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ISLR2)
+library(ggplot2)
+```
+
+## Exercise - 1
+
+```{r}
+diamonds_data = read.csv("Diamonds.csv")
+
+ggplot(data = diamonds_data, mapping = aes(x = carat, y = price)) + geom_point(col = "blue")
+ggplot(data = diamonds_data, mapping = aes(x = price, y = cut)) + geom_boxplot(col = "brown")
+```
+
+## Exercise - 2
+
+```{r}
+lm_price_carat <- lm(price ~ carat, data = diamonds_data)
+summary(lm_price_carat)
+#plot(lm_price_carat)
+```
+
+- Firstly, from the call we can see "lm" which means that we are dealing with a linear model. After that, we have the formula which shows that *price* is the Y variable and *carat* is the X variable, and the data frame that we are utilizing.  
+- From the residuals, we can see that the point furthest below the regression line is *-18585.3*, 25% of our residuals are less than *-804.8* (1st quartile), the median is *-18.9*, 25% of our residuals are greater than *537.4*, and that the point which is furthest above the regression line is *12731.7*.  
+- From the coefficients we can deduce that an increase of 1 in carat would result in a 7756.43 increase in price.  
+- We can see that *53938* data points went into the estimation of the parameter (DOF).  
+- We can also see that the standard deviation of the residuals is *1549*.  
+- From the Multiple R-squared, we can deduce that *84.93% of the variation in price can be explained by the carat*.  
+- The multiple R-squared is equal to the Adjusted R-squared in this case since we only have one predictor (simple linear regression).  
+- The F-statistic is *3.041e+05* which is very high and indicates that there is a relationship between the predictor (carat) variable and the response (price) variable.  
+- The p-value is *< 2.2e-16* which is extremely low (<<0.05) and means that this model is statistically significant.  
+
+## Exercise - 3
+
+```{r}
+multiple_lm <- lm(price ~ carat + clarity + color, data = diamonds_data)
+summary(multiple_lm)
+```
+
+- Firstly, from the call we can see "lm" which means that we are dealing with a linear model. After that, we have the formula which shows that *price* is the Y variable and that we have multiple predictors in which *carat* is X1, *clarity* is X2, and *color* is X3; and the data frame that we are utilizing.  
+- From the residuals, we can see that the point furthest below the regression line is *-17310.9*, 25% of our residuals are less than *-678.0* (1st quartile), the median is *-192.2*, 25% of our residuals are greater than *473.0*, and that the point which is furthest above the regression line is *10313.2*.  
+- From the coefficients we can deduce that an increase of 1 in carat would result in a 8856.23 increase in price. An increase of 1 in clarityIF would result in a 5718.23 increase in price etc... However, we note that all the color variables are negative since we can not truly increase color to increase price.  
+- We can see that *53925* data points went into the estimation of the parameter (DOF).  
+- We can also see that the standard deviation of the residuals is *1170*.  
+- From the Multiple R-squared, we can deduce that *91.4% of the variation in price can be explained by the interaction of the predictors*.  
+- The multiple R-squared is very close to the Adjusted R-squared here so it implies that we are NOT over fitting.  
+- The F-statistic is *4.092e+04* which is very high and indicates that there is a relationship between the predictor variables and the response variable.  
+- The p-value is *< 2.2e-16* which is extremely low (<<0.05) and means that this model is statistically significant.  
+
+## Exercise - 4
+
+```{r}
+full_multiple_lm <- lm(price ~ carat + cut + clarity + color + depth + table + x + y + z, data = diamonds_data)
+summary(full_multiple_lm)
+```
+
+- Firstly, from the call we can see "lm" which means that we are dealing with a linear model. After that, we have the formula which shows that *price* is the Y variable and that we have multiple predictors in which *carat* is X1, *clarity* is X2, *color* is X3, etc...; and the data frame that we are utilizing.  
+- From the residuals, we can see that the point furthest below the regression line is *-21376.0*, 25% of our residuals are less than *-592.4* (1st quartile), the median is *-183.5*, 25% of our residuals are greater than *376.4*, and that the point which is furthest above the regression line is *10694.2*.  
+- From the coefficients we can deduce that an increase of 1 in carat would result in a 11256.978 increase in price. An increase of 1 in clarityIF would result in a 5345.102 increase in price etc...  
+- We can see that *53916* data points went into the estimation of the parameter (DOF).  
+- We can also see that the standard deviation of the residuals is *1130*.  
+- From the Multiple R-squared, we can deduce that *91.98% of the variation in price can be explained by the interaction of the predictors*.  
+- The multiple R-squared is exactly equal (or extremely near) to the Adjusted R-squared here so it implies that we are NOT over fitting.  
+- The F-statistic is *2.688e+04* which is very high and indicates that there is a relationship between the predictor variables and the response variable.  
+- The *y and z predictors* show a high p-value (0.619 & 0.134 respectively) which could indicate that other predictors are masking / shadowing the significance of y and z by having correlations with them; This does NOT mean that y and z do not have a relationship with price, and it can be shown by performing 2 simple linear regressions in which both show a significant relationship with price.
+- The p-value of the model is *< 2.2e-16* which is extremely low (<<0.05) and means that this model is statistically significant.  
+
+```{r}
+#Proof for y and z:
+lm_for_y <- lm(price ~ y, data = diamonds_data)
+summary(lm_for_y)
+lm_for_z <- lm(price ~ z, data = diamonds_data)
+summary(lm_for_z)
+#check correlations for y and each, z and each => find the predictors causing this.
+```
+
+
+**Comparing to the previous model: **  
+*There are a few minor and subtle differences & similarities between the two, but the core comparison would be:*  
+- They both are equally statistically significant as they have the same general p-value.  
+- EX4 has a lower F-stat than EX3 (although both are high) which could be due to the increase in the number of predictors.  
+- The R^2 of EX4 is very slightly higher (0.58 difference) than EX3 which indicates that a higher % of the variation in price comes from the interaction of predictors in EX4 than EX3.  
+
