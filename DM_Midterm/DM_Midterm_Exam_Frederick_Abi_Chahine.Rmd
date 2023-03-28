@@ -1,0 +1,290 @@
+---
+title: "Exam_1"
+author: "Frederick Abi Chahine"
+date: "10/16/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Task 1
+
+### Task 1 - Exercise - 1
+
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(dplyr)
+library(ISLR2)
+library(reshape2)
+library(tidymodels)
+library(MASS)
+library(boot)
+library(pROC)
+```
+
+This chunk is simply readying all necessary libraries.  
+
+```{r}
+data_set = read.csv("Frederick.csv")
+#View(data_set)
+names(data_set)
+summary(data_set)
+```
+
+From the summary we can see that all variables are numerical. However, just by looking at the data we can deduce that resp2 needs to be categorical. The chunk below changes its type.  
+
+```{r}
+data_set$resp2 <- as.factor(data_set$resp2)
+data_set$Var11 <- as.numeric(data_set$Var11)
+summary(data_set)
+```
+
+
+### Task 1 - Exercise - 2
+
+```{r}
+which(is.na(data_set))
+```
+  
+As we can see from the output, there are no missing (NA) values in our data set. 
+
+### Task 1 - Exercise - 3
+
+```{r}
+quant <- data_set[,-c(1,2)] #we removed X as it is the ID
+pairs(quant[,c(1,2,3,4)])
+pairs(quant[,c(1,5,6,7,8)]) 
+pairs(quant[,c(1,9,10,11,12)])
+cor(data_set$resp1, quant) #for validation
+```
+
+From the correlation shown above, we can deduce that:  
+- resp1 has slight to no correlation with variables Var2, Var8, Var9, and Var11.
+- resp1 has a sufficient positive correlation with variables Var3, Var6, Var7, and Var10. (with itself of course its 100%)  
+- resp1 has a sufficient negative correlation with variables Var1, Var4 (not very high), and Var5.  
+
+### Task 1 - Exercise - 4
+
+```{r}
+ggplot(data = data_set, mapping = aes(x = as.factor(Var11), y = resp1), color = as.factor(Var11)) + geom_boxplot()
+```
+
+First of all, we used Var11 as factor in order to obtain these organized box-plots.  
+There really is not much to comment about here other than the fact that Var11 with value 4 has alot of outliers to the south of the 
+
+
+### Task 1 - Exercise - 5
+
+```{r}
+
+set.seed(1234)
+
+tr = data_set %>% slice_sample(prop = 0.7)
+te = anti_join(data_set, tr, by = "X")
+
+nrow(tr) / nrow(data_set) #just to ensure that the % is correct
+nrow(te) / nrow(data_set) # //
+
+head(tr)
+head(te)
+
+lm.fit = lm(resp1~Var11, data = tr) #we are generating a linear model
+summary(lm.fit)
+```
+
+- We can directly see that the multiple R squared is extremely low (0.077%), this means that the predictor Var11 can only explain 0.077% of the variation in the response => This means that the predictor Var11 can NOT explain the variation in the response.  
+- F-statistic is greater than 1, thus there is a relationship between the predictor variable and the response variable.  
+- The P-value appears to be low which means that it is statistically significant. 
+
+```{r}
+pred <- predict(lm.fit, newdata = te)
+mse <- mean((pred-te$resp1)^2)
+mse #this is the test error
+```
+
+  
+### Task 1 - Exercise - 6
+
+```{r}
+data = data_set[,-1] # we are removing X so it wont interfere
+mlm.fit = glm(resp1~., data = data)
+summary(mlm.fit)
+```
+
+- From the summary we can see that some P-values are high and some are low, however the high ones do not mean that they are insignificant but rather that they could have correlations with other variables that are masking their effect. For instance, Var11 was shown before to have a low p-value; however, here it shows a high p-value which indicates that it has a correlation with another variable/s.  
+
+```{r}
+loocv <- function(mod){
+  hat <- lm.influence(mod)$hat
+  mean((residuals(mod)/(1-hat))^2)
+}
+loocv(mlm.fit)
+
+#err = cv.glm(data_set, mlm.fit)$delta[1] #this gives us the test error
+#err 
+#this will take a long time!! So I changed it to the one above.
+```
+
+
+### Task 1 - Exercise - 7
+
+```{r}
+fit <- glm(resp1~Var5+Var6+Var7+Var5:Var6+Var6:Var7+Var5:Var7, data = data)
+summary(fit)
+
+```
+  
+From the above summary, we can deduce that:  
+- Var5 and Var6 do have an interaction as their p-value is low  
+- Var6 and Var7 do as well have an interaction  
+- Var5 and Var7 do NOT have an interaction as their p-value is very high.
+
+```{r}
+cv.glm(data, fit, K=10)$delta[1] #this is for the test error using 10 folds
+```
+
+
+### Task 1 - Exercise - 8
+
+```{r}
+set.seed(1234)
+
+tr = data_set %>% slice_sample(prop = 0.8)
+te = anti_join(data_set, tr, by = "X")
+
+nrow(tr) / nrow(data_set) #just to ensure that the % is correct
+nrow(te) / nrow(data_set) # //
+
+head(tr)
+head(te)
+
+degree = 2:4
+mse = 2:4
+
+for (d in degree){
+    resp1_poly <- lm(resp1 ~ poly(Var2,d,raw=TRUE), data = tr)
+    
+    pred <- predict(resp1_poly, te)
+    
+    mse[d-1] <- mean((te$resp1 - pred)^2)
+    #if (d==degree){
+      #print minimum MSE to highest MSE, done by a small loop
+    #}
+}
+
+mse
+degree
+plot(degree, mse, type = "b", col = "blue", pch = 16, main = "Polynomial Regression Model", xlab = "Degree of polynomial")
+```
+
+From the shown data, we can see that the quartic model has a slightly lower MSE than the cubic, and the cubic model has a slightly lower MSE than the quadratic model. (visibil in the graph)
+
+
+## Task 2
+
+### Task 2 - Exercise - 1
+
+```{r}
+set.seed(1234)
+#View(data_set)
+temp = data_set$resp2
+temp = ifelse(temp=="0", "No", "Yes") #since it is a factor as we changed it to be, we can change 0 and 1 to No and Yes respectively
+data_set$resp2 = temp
+#View(data_set)
+
+fit2 <- glm(resp2~Var2+Var10, data = data, family = binomial)
+cv.glm(data, fit2, K=5)$delta[1] #this is for the test error using 10 folds
+```
+
+Commenting on the error, we can see that it is roughly 0,232 which means that the accuracy of the model is 1-0.232, which is almost 77%, and this is pretty decent.
+
+### Task 2 - Exercise - 2
+
+```{r}
+set.seed(1234)
+
+tr = data_set %>% slice_sample(prop = 0.7)
+te = anti_join(data_set, tr, by = "X")
+
+nrow(tr) / nrow(data_set) #just to ensure that the % is correct
+nrow(te) / nrow(data_set) # //
+
+head(tr)
+head(te)
+
+tr = tr %>% dplyr::select(-X)
+te = te %>% dplyr::select(-X)
+
+lda.mod <- lda(resp2 ~ Var2+Var10, data = tr)
+
+#summary(lda.mod)
+lda.mod
+
+lda.mod.pred <- predict(newdata = te, lda.mod)
+
+#nrow(as.data.frame(lda.mod.pred))
+#head(lda.mod.pred$x)
+#names(lda.mod.pred)
+```
+
+
+```{r}
+conf <- table(predicted = lda.mod.pred$class, reference = te$resp2)
+
+f <- function(conftable) {
+  se <- conftable[2,2]/(conftable[1,2] + conftable[2,2]) #for the true positive =>  #sensitivity
+  sp <- conftable[1,1]/(conftable[1,1] + conftable[2,1]) #for the true negative = > #specificity
+  acc <- sum(diag(conftable)) / sum(conftable) #for the accuracy
+  return(c(sensitivity = se, specificity = sp, accuracy = acc))
+}
+
+f(conf) #this will display the sensitivity, specificity & accuracy on the screen
+```
+
+The chunk of code above generates the sensitivity, specificity & accuracy of the LDA model  
+- The sensitivity shows the true positive  
+- The specificity shows the true negative  
+- The accuracy shows how many True positive and negative do we have from the total  
+
+### Task 2 - Exercise - 3
+
+```{r}
+qda.mod <- qda(resp2 ~ Var2+Var10, data = tr)
+
+#summary(qda.mod)
+#qda.mod
+
+qda.mod.pred <- predict(qda.mod, newdata = te)
+
+f(table(qda.mod.pred$class, te$resp2))
+```
+
+The chunk of code above generates the sensitivity, specificity & accuracy of the QDA model  
+- The sensitivity here is slightly higher than the LDA model
+- The specificity here is also slightly higher than the LDA model 
+- The accuracy here is as well higher than the LDA model  
+
+### Task 2 - Exercise - 4
+
+```{r}
+#usinf library pROC
+
+#names(lda.mod.pred)
+
+roc.lda <- roc(response = te$resp2, predictor = lda.mod.pred$posterior[,2])
+
+roc.qda <- roc(response = te$resp2, predictor = qda.mod.pred$posterior[,2])
+
+ggroc(list(lda=roc.lda,
+           qda=roc.qda))
+
+auc(roc.lda)
+auc(roc.qda)
+```
+
+
+A suitable way to compare the models is using the pROC library.  
+As we can see from the graph generated, both models are extremely similar; However, the qda model seems to be very slightly better than the lda model in this case. We can even see that the area under the curve for the QDA model is slightly higher as well than the LDA model.
