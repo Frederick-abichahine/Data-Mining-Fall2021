@@ -1,0 +1,740 @@
+---
+title: "Final Project - ASD"
+author: "Frederick Abi Chahine"
+date: "11/24/2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(tree)
+library(randomForest)
+library(caret)
+library(dplyr)
+library(ggpubr)
+library(plotly)
+library(e1071)
+library(recipes)
+library(forcats)
+library(rpart)
+library(rpart.plot)
+library(pROC)
+library(boot)
+```
+
+# Data Exploration:-
+
+```{r}
+autism <- read.csv("Autism_data.csv", na = "?")
+dim(autism)
+summary(autism)
+length(which(autism$age > 90))
+#View(autism)
+```
+
+From the summary above we can see that:  
+- Many predictors should be assigned to their correct type.  
+- The Max of age is 383 which is very illogical, so a small check was performed to see how many participants had an age > 90, and it appears that only one person had a mistake, being that of the 383.  
+
+## Correcting Type:
+
+```{r}
+columns = c(1,2,3,4,5,6,7,8,9,10,12,13,14,15,16,17,19,20,21)
+autism[,columns] = as.data.frame(lapply(autism[,columns],as.factor))
+summary(autism)
+```
+
+Here, above, we are assigning each predictor to its correct type. From the summary we can see what has been adjusted.  
+
+## Data Visualization:-  
+
+### Categorical Predictors:
+
+```{r warning=FALSE}
+categorical=matrix(ncol=2, nrow=0)
+colnames(categorical)=c("column", "class")
+
+for (i in columns[-21])
+{
+  m=matrix(ncol=2, nrow=length(which(autism[,i]==1)))
+  colnames(m)=c("column", "class")
+  m[,1]=i
+  m[,2]=as.vector(autism$Class.ASD[which(autism[,i]==1)])
+  categorical=rbind(categorical, m)
+}
+
+plot = ggplot(as.data.frame(categorical), aes(column)) + 
+  geom_bar(aes(fill=class)) + 
+  theme(axis.title.x=element_blank(), axis.text.x=element_blank(), axis.ticks.x=element_blank()) 
+plot
+```
+
+Here we are looking at the distribution of the first ten binary variables between the two ASD classes. We can visualize from the figure above that every one of those factors occur in both classes, implying that they have some value in predicting either of the classes. Thus, they will all be kept in the data.  
+
+```{r}
+level = data.frame(sapply(autism[,columns], nlevels))
+level$color = 0
+colnames(level) = c("number_of_levels", "color")
+level$color[which.max(level$number_of_levels)] = 1
+level$color=as.factor(level$color)
+variable=colnames(autism[,columns])
+
+ggplot(data = level) + 
+  geom_col(aes(x=variable, y=number_of_levels, fill= color), show.legend = FALSE) +
+  geom_text(aes(x=colnames(autism[,columns]), y=level$number_of_levels, label = number_of_levels), nudge_y = 0.03 , check_overlap = TRUE) +
+  theme(axis.text.x = element_text(angle = 40, hjust = 1))
+```
+
+The number of tiers per predictor is displayed. The plot above shows that the country_of_residence predictor has the most levels surpassing 32, which can cause problems when building trees; I have rectified this below. Also, it's evident that the age_cat predictor only has one level, and it won't assist us in predicting either class, so I'm going to eliminate it.  
+
+```{r}
+# Eliminating age_cat predictor...
+autism=autism[,-19]
+```
+
+```{r}
+# Dealing with the country_of_residence predictor...
+nb_of_obs = data.frame(tapply(autism$country_of_residence, autism$country_of_residence, length))
+nb_of_obs$color = 0
+colnames(nb_of_obs) = c("number_of_observations", "color")
+nb_of_obs$color = as.factor(nb_of_obs$color)
+countries = rownames(nb_of_obs)
+
+ggplot(data = nb_of_obs) + 
+  geom_col(aes(x=countries, y=number_of_observations, fill= color), show.legend = FALSE) +
+  geom_text(aes(x=countries, y=nb_of_obs$number_of_observations, label = number_of_observations), nudge_y = 1 , check_overlap = TRUE) +
+  theme(axis.text.x = element_text(angle = 50, hjust = 1))
+```
+
+The plot above vividly demonstrates that there are several levels with a small number of observations. These predictors will not be removed because they may be beneficial in the forecasts. Instead, I'll merge all of the levels with fewer than five observations into a single level named "other" below.  
+
+```{r}
+# Combining all levels that have < 5 observations
+others = rownames(nb_of_obs[which(nb_of_obs$number_of_observations<5),])
+autism$country_of_residence = fct_collapse(autism$country_of_residence, other=others)
+levels(autism$country_of_residence)
+```
+
+### Continuous Predictors:  
+
+```{r}
+variances = sapply(autism[,c(11,18)], var,na.rm = TRUE)
+variances
+
+standard_deviation = apply(autism[,c(11,18)], 2, sd, na.rm = TRUE)
+standard_deviation
+```
+
+The large variation of the age data indicates that there are a few outliers that are drastically influencing the variance value. I'll further investigate this.  
+
+```{r, warning=FALSE}
+plot_ly(data = autism, x = autism$age, type="scatter", mode="markers", color = autism$Class.ASD) %>%
+  layout (xaxis=list(title="Age"))
+plot_ly(data = autism, x = autism$result, type="scatter", mode="markers", color = autism$Class.ASD) %>%
+  layout (xaxis=list(title="Total screening result"))
+```
+
+
+The first plot above demonstrates exactly what was stated before in the sense that there is a single abnormal outlier for the age attribute that is 383. This outlier belongs to the NO class of ASD. To deal with this, I will replace this abnormal value of age by the mean of the class it belongs to in the column.  
+
+The second plot above shows no abnormal values nor any outliers. Moreover, this plot illustrated that "results" predictor may be of significance in predicting the "Class/ASD". Everything below 6 (including 6) suggests a "no" class of ASD, whereas everything over 6 predicts a "yes" class of ASD.  
+```{r, warning=FALSE}
+# Replacing abnormal values of age by the corresponding mean of the class that it belongs to within that column
+index = which(autism$age==383)
+class_no = which(autism$Class.ASD=="NO")
+
+ind = which(class_no==index)
+class_no = class_no[-ind]
+
+autism$age[index] = mean(autism$age[class_no],na.rm=TRUE)
+```
+
+
+## Checking For & Dealing With Missing Values:  
+
+```{r}
+na_columns=unique(which(is.na(autism[,]),arr.ind=TRUE)[,2])
+na_count=matrix(ncol=2,nrow=3)
+
+for(i in 1:length(na_columns))
+{
+  na_count[i,2]=length(which(is.na(autism[,na_columns[i]])))
+  na_count[i,1]=names(autism[na_columns[i]])
+}
+
+colnames(na_count)=c("Column","NA count")
+na_count
+```
+
+Above are the columns that contain missing values.  
+- I will deal with the missing values in "age" by replacing them with the mean of the class that they belong to.  
+- I will deal with the missing values in the categorical variables by replacing them with the mode of the class of each of these variables.  
+
+```{r}
+# Replacing missing values in "age"
+indicies = which(is.na(autism$age))
+class = autism$Class.ASD[indicies]
+class
+
+autism$age[indicies]=mean(autism$age[class_no],na.rm=TRUE)
+```
+
+As we can see, both NAs in the attribute "age" belong to the class NO of ASD; This is why I replaced them with the mean of that class.  
+
+```{r}
+# Replacing missing values in the categorical variables
+calculate_mode = function(x) 
+{
+  uniqx = unique(na.omit(x))
+  uniqx[which.max(tabulate(match(x, uniqx)))]
+}
+class_yes = which(autism$Class.ASD == "YES")
+mode_no_ethnicity = calculate_mode(autism$ethnicity[class_no])
+mode_yes_ethnicity = calculate_mode(autism$ethnicity[class_yes])
+mode_no_relation = calculate_mode(autism$relation[class_no])
+mode_yes_relation = calculate_mode(autism$relation[class_yes])
+
+na_ethnicity = which(is.na(autism$ethnicity))
+for(i in 1:length(na_ethnicity))
+{
+  if(autism$Class.ASD[na_ethnicity[i]] == "NO")
+    autism$ethnicity[na_ethnicity[i]] = mode_no_ethnicity
+  else
+    autism$ethnicity[na_ethnicity[i]] = mode_yes_ethnicity
+}
+
+na_relation = which(is.na(autism$relation))
+for(i in 1:length(na_relation))
+{
+  if(autism$Class.ASD[na_relation[i]] == "NO")
+    autism$relation[na_relation[i]] = mode_no_relation
+  else
+    autism$relation[na_relation[i]] = mode_yes_relation
+}
+```
+
+## Checking For & Dealing With Outliers:  
+
+The "result" variable has no outliers, as observed in prior analyses. However, there are several outliers in the age variable; And, when I plot the distribution of the outliers across the two classes, I discover that they all belong to the class "NO" of ASD, therefore they may be useful in forecasting that class, so I will leave them in rather than removing them.
+
+```{r}
+boxplot(autism$result, col="light green")$out
+age_outliers = boxplot(autism$age, col=" light green")$out 
+autism$age[age_outliers]
+boxplot_weight = boxplot(autism$age ~ autism$Class.ASD, data = autism, xlab = 'class', ylab = 'age', col=c("pink","light blue"))
+```
+
+- The first boxplot clearly demonstartes that the result attribute has no outliers.  
+- The second boxplot, for the age attribute, shows otherwise in the sense that it does have outliers.  
+- The final boxplot shows that all the ouliers in age are also in class "NO" of ASD.  
+
+## Correlation:  
+
+```{r}
+cor(autism[,c(11,18)])
+```
+
+As we can see from the cor() function, the two continuous variables are NOT correlated at all, hence we can keep both of them in the data.  
+
+## Normality:  
+
+```{r}
+# Testing for normality
+shapiro.test(autism$age)$p.value
+shapiro.test(autism$result)$p.value
+```
+
+The age and result variables are both NOT normal, as indicated by the Shapiro test.  
+
+## Checking If Data Is Imbalanced:  
+
+```{r}
+length(autism$Class.ASD)
+cat(round((length(which(autism$Class.ASD == "YES"))/length(autism$Class.ASD))*100),"% of class ASD is YES \n")
+
+cat(round((length(which(autism$Class.ASD == "NO"))/length(autism$Class.ASD))*100),"% of class ASD is NO \n")
+```
+
+As we can see, the data is roughly 70:30, which means that the data is a bit more than slightly imbalanced; However, the imbalance is not big enough to cause many problems. Hence, I will not be dealing with this imbalance.  
+
+# Building Models:-  
+
+## Trees:  
+
+```{r}
+bootstrap1 = function(tree_data, output, predictors, m, percent)
+{
+  n = nrow(tree_data)
+  index = c(1:n)
+  validation_nb = floor(n - (n*percent/100))
+  
+  bagging = c()
+  tables = list()
+  accuracies = c()
+  worst_gini = c()
+  
+  for(j in 1:m)
+  {
+    validation = sample(n, validation_nb, replace=F)
+    train70 = index[-validation]
+    train30 = sample(train70, validation_nb, replace=T)
+    train = c(train70, train30)
+    
+    bagging = randomForest(Class.ASD~., tree_data, subset = train,
+                           mtry = (ncol(tree_data)-1), importance =TRUE)
+    predictions = predict(bagging, newdata = tree_data[validation,])
+    tables[[j]] = table(predict = predictions, truth = output[validation])
+    accuracies[j] = (tables[[j]][1,1] + tables[[j]][2,2]) / sum(tables[[j]])
+    
+    worst_gini[j] = which.min(bagging$importance[,4])
+  }
+  
+  l = list(bagging,tables,accuracies,worst_gini)
+  return(l)
+}
+
+variables = colnames(autism[,-c(20)])
+tree_data = autism
+tree_accuracies = c() 
+rm_subset = c()
+
+for(i in c(1:18))
+{
+  r = bootstrap1(tree_data, tree_data$Class.ASD, variables, 100, 70)
+  tree_accuracies[i] = mean(r[[3]])
+  print(r[[1]]$importance)
+  rm_subset = r[[4]][1]
+  cat("\nThe predictor removed is: ")
+  print(colnames(tree_data[rm_subset]))
+  cat("\n")
+  tree_data=tree_data[,-rm_subset]
+}
+```
+
+So, the resultant accuracies of each group of predictors that I obtained after deleting the poorest predictor at each cycle of the bagging approach are as follows:  
+
+```{r}
+tree_accuracies 
+```
+
+Because the sole meaningful predictor in this case is the results, the accuracies are all identical, that being of 1. Because the accuracies are all the same, I'll go with the model that only has the results predictor as the finest.  
+
+According to the bagging, results is a highly important predictor, but no other predictor appears to have an influence on the output class when results is present. Hence, I will attempt to repeat the bagging process excluding the results predictor in order to see the role of the other predictors in affecting the output, and also what is the second strongest subgroup of predictors:  
+
+```{r}
+temp_autism = autism[,-18]
+variables = colnames(temp_autism[,-c(19)])
+temp_tree_accuracies=c()
+temp_rm_subset = c()
+temp_rs = list()
+
+for(i in c(1:17))
+{
+  temp_r = bootstrap1(temp_autism, temp_autism$Class.ASD, variables,100,70)
+  temp_tree_accuracies[i] = mean(temp_r[[3]])
+  temp_rs[[i]] = temp_r[[1]]
+  temp_rm_subset = temp_r[[4]][1]
+  cat("\nThe predictor removed is: ")
+  print(colnames(temp_autism[temp_rm_subset]))
+  cat("\n")
+  temp_autism = temp_autism[,-temp_rm_subset]
+}
+```
+
+The resultant accuracies of each collection of predictors are shown:  
+
+```{r}
+temp_tree_accuracies
+```
+
+Without the results predictor, the optimal group of predictors is:  
+
+```{r}
+temp_rs[[which.max(temp_tree_accuracies)]]
+```
+
+```{r}
+temp_rs[[which.max(temp_tree_accuracies)]]$importance
+```
+
+However, the accuracy of the new group of predictors without the results predictor is less than that of the results predictor -> 0.9 less than 1.   As a result, the best subset of the two is the one that includes only the result predictor.  
+
+Additionally, the following (Both with and without the results predictor) is another way to perform this model & it includes the Tree Plot for both as well:
+
+```{r}
+# WITH RESULTS ATTRIBUTE
+
+data = autism #to keep autism data set as backup.
+
+sample_split <- function(dataset, split_ratio, seed = NULL) {
+  set.seed(seed, sample.kind="Rejection")
+  
+  tr = dataset %>% slice_sample(prop=split_ratio)
+  
+  #using anti-join to get test data
+  te  = anti_join(dataset, tr, by = 'id')
+  
+  #remove from tr and te the ID variable - not useful anymore
+  training = tr %>% dplyr::select(-id)
+  testing = te %>% dplyr::select(-id)
+  
+  return(list(
+    train=training,
+    test=testing
+  ))
+}
+
+data <- data %>% mutate(id=row_number())
+data_split <- sample_split(data, 0.7, seed = 124)
+
+#regression tree
+data_tree <- rpart(formula = Class.ASD ~. , data = data_split$train, method = "class")
+
+#predict
+data_pred <- predict(object = data_tree, newdata = data_split$test)
+
+#pruning
+data_tree$cptable
+#cp here is the alpha in the slides (cost complexity pruning)
+#we want to pick the one that will give us the smallest xerror, in this case it is the 1st. We must pick the number of splits based on the lowest xerror
+
+#converting it to a data frame to make it easier to access columns
+cp_table = data.frame(data_tree$cptable)
+
+which.min(cp_table$xerror) #to give the CP that has the lowest error
+
+wm <- cp_table$CP[which.min(cp_table$xerror)]
+
+min(cp_table$xerror) #to give the lowest error 
+
+pruned <- prune(tree = data_tree, cp = wm) #this is not the only way
+
+#plotting tree after prunning
+rpart.plot(pruned)
+
+```
+
+
+As we can see, the results factor has a very significant role in determining whether a patient falls into the Yes / No classes of ASD; Hence, it is masking the role / effect of other predictors => Below is the Tree without the results predictor:  
+
+```{r}
+# WITHOUT RESULT ATTRIBUTE
+
+data_noRESULT = autism[,-18] #to keep autism data set as backup.
+
+sample_split <- function(dataset, split_ratio, seed = NULL) {
+  set.seed(seed, sample.kind="Rejection")
+  
+  tr = dataset %>% slice_sample(prop=split_ratio)
+  
+  #using anti-join to get test data
+  te  = anti_join(dataset, tr, by = 'id')
+  
+  #remove from tr and te the ID variable - not useful anymore
+  training = tr %>% dplyr::select(-id)
+  testing = te %>% dplyr::select(-id)
+  
+  return(list(
+    train=training,
+    test=testing
+  ))
+}
+
+data_noRESULT <- data_noRESULT %>% mutate(id=row_number())
+data_noRESULT_split <- sample_split(data_noRESULT, 0.7, seed = 124)
+
+#regression tree
+data_tree_noRESULT <- rpart(formula = Class.ASD ~. , data = data_noRESULT_split$train, method = "class")
+
+#predict
+data_tree_noRESULT_pred <- predict(object = data_tree_noRESULT, newdata = data_noRESULT_split$test)
+
+#pruning
+data_tree_noRESULT$cptable
+#cp here is the alpha in the slides (cost complexity pruning)
+#we want to pick the one that will give us the smallest xerror, in this case it is the 1st. We must pick the number of splits based on the lowest xerror
+
+#converting it to a data frame to make it easier to access columns
+cp_table = data.frame(data_tree_noRESULT$cptable)
+
+which.min(cp_table$xerror) #to give the CP that has the lowest error
+
+wm <- cp_table$CP[which.min(cp_table$xerror)]
+
+min(cp_table$xerror) #to give the lowest error 
+
+pruned <- prune(tree = data_tree_noRESULT, cp = wm) #this is not the only way
+
+#plot tree
+rpart.plot(pruned)
+```
+
+
+As expected, we can now observe more decision nodes inside of the tree since we no longer have the masking effect of the results predictor.  
+
+## Random Forests:  
+
+```{r}
+bootstrap2 = function(data, output, predictors, m, percent,mtry)
+{
+  n = nrow(data)
+  index = c(1:n)
+  validation_nb = floor(n-(n*percent/100))
+  
+  rfs = list()
+  accuracies = c()
+  tables = list()
+  
+  for(j in 1:m)
+  {
+    validation = sample(n, validation_nb, replace=F)
+    train70 = index[-validation]
+    train30 = sample(train70, validation_nb, replace=T)
+    train = c(train70,train30)
+    
+    rfs[[j]] = randomForest(Class.ASD~. , data[train,], mtry=mtry)
+    predictions = predict(rfs[[j]], newdata = data[validation,])
+    
+    tables[[j]] = table(predict=predictions, truth=output[validation])
+    accuracies[j] = (tables[[j]][1,1]+tables[[j]][2,2])/sum(tables[[j]])
+    
+  }
+  l = list(rfs,accuracies,tables)
+  return(l)
+}
+mtry = sqrt(ncol(autism))
+variables = colnames(autism[,-c(20)])
+rff = bootstrap2(autism, autism$Class.ASD, variables, 100, 70, mtry)
+accuracyy = mean(rff[[2]])
+accuracyy  
+```
+
+As shown here, the Random Forest Bootstrap accuracy is 1.  
+
+## Support Vector Machine - SVM:  
+
+I will only run the bootstrap 50 times for the SVM models as it is too computationally costly and takes too long.  
+
+### Linear Kernel:  
+
+```{r}
+bootstrap3 = function(data, output, predictors, m, percent)
+{
+  n = nrow(data)
+  index = c(1:n)
+  validation_nb = floor(n-(n*percent/100))
+  
+  models = list()
+  best_models = list()
+  tables = list()
+  costs = c()
+  accuracies = c()
+  
+  for(j in 1:m)
+  {
+    validation = sample(n, validation_nb, replace=F)
+    train70 = index[-validation]
+    train30 = sample(train70, validation_nb, replace=T)
+    train = c(train70,train30)
+    
+    models[[j]] = tune(svm, 
+                       Class.ASD~.,
+                       data = data,
+                       kernel = "linear", 
+                       ranges =list(cost = c(0.001,0.01,0.1,1,2,5,10,50,100)),
+                       scale = FALSE)
+    best_models[[j]] = models[[j]]$best.model
+    costs[j] = best_models[[j]]$cost
+    
+    predictions = predict(best_models[[j]], data[validation,])
+    tables[[j]] = table(predict = predictions, truth = output[validation])
+    accuracies[j] = (tables[[j]][1,1] + tables[[j]][2,2])/sum(tables[[j]])
+    
+  }
+  l = list(models, tables, accuracies, costs)
+  return(l)
+}
+variables = colnames(autism[,-c(20)])
+result = bootstrap3(autism, autism$Class.ASD, variables, 50, 70)
+accuracy = mean(result[[3]])
+```
+
+
+For the linear kernel, the accuracy and best cost value, respectively, are as follows:  
+
+```{r}
+accuracy
+cost = mean(result[[4]])
+cost 
+```
+
+### Polynomial Kernels:  
+
+```{r}
+bootstrap4 = function(data, output, predictors, m, percent, degree)
+{
+  n = nrow(data)
+  index = c(1:n)
+  validation_nb = floor(n-(n*percent/100))
+  
+  models = list()
+  best_models = list()
+  tables = list()
+  accuracies = c()
+  gammas = c()
+  costs = c()
+  
+  for(j in 1:m)
+  {
+    validation = sample(n, validation_nb, replace=F)
+    train70 = index[-validation]
+    train30 = sample(train70, validation_nb, replace=T)
+    train = c(train70,train30)
+    
+    models[[j]] = tune(svm, 
+                       Class.ASD~.,
+                       data = data,
+                       kernel = "polynomial",
+                       degree = degree,
+                       ranges = list(cost = c(0.001,0.01,0.1,1,10,100), 
+                                     gamma=c(0.1,0.5,1,2,3,4)), 
+                       scale=FALSE)
+    
+    best_models[[j]] = models[[j]]$best.model
+    
+    costs[j] = best_models[[j]]$cost
+    gammas[j] = best_models[[j]]$gamma
+    
+    predictions = predict(best_models[[j]], data[validation,])
+    tables[[j]] = table(predict = predictions, truth = output[validation])
+    accuracies[j] = (tables[[j]][1,1] + tables[[j]][2,2])/sum(tables[[j]])
+    
+  }
+  l = list(models,tables,accuracies,costs,gammas)
+  return(l)
+}
+accuracies = c()
+costs = c()
+gammas = c()
+
+for(i in c(2:5)) # to check for different degrees
+{
+  results = bootstrap4(autism, autism$Class.ASD, variables, 50, 70, i)
+  accuracies[i-1] = mean(results[[3]])
+  costs[i-1] = mean(results[[4]])
+  gammas[i-1] = mean(results[[5]])
+}
+```
+
+
+For the polynomial kernels, the accuracy, best cost, and gamma values for the used degrees are:  
+
+```{r}
+cat("\nFor polynomial degree 2, the accuracy, best cost, & gamma values are: \n")
+accuracies[1]
+costs[1]
+gammas[1]
+cat("\n")
+cat("\nFor polynomial degree 3, the accuracy, best cost, & gamma values are: \n")
+accuracies[2]
+costs[2]
+gammas[2]
+cat("\n")
+cat("\nFor polynomial degree 4, the accuracy, best cost, & gamma values are: \n")
+accuracies[3]
+costs[3]
+gammas[3]
+cat("\n")
+cat("\nFor polynomial degree 5, the accuracy, best cost, & gamma values are: \n")
+accuracies[4]
+costs[4]
+gammas[4]
+cat("\n")
+```
+
+## Radial Kernel:  
+
+```{r}
+bootstrap5=function(data, output, predictors, m, percent)
+{
+  n = nrow(data)
+  index = c(1:n)
+  validation_nb = floor(n-(n*percent/100))
+  
+  models = list()
+  best_models = list()
+  tables = list()
+  accuracies = c()
+  costs = c()
+  gammas = c()
+  
+  for(j in 1:m)
+  {
+    validation = sample(n, validation_nb, replace=F)
+    train70 = index[-validation]
+    train30 = sample(train70, validation_nb, replace=T)
+    train = c(train70,train30)
+    
+     models[[j]] = tune(svm,
+                        Class.ASD~.,
+                        data = data,
+                        kernel = "radial",
+                        ranges = list(cost=c(0.001,0.01,0.1,1,10,100),
+                                      gamma=c(0.1,0.5,1,2,3,4)),
+                        scale=FALSE)
+     
+     best_models[[j]] = models[[j]]$best.model
+     costs[j] = best_models[[j]]$cost
+     gammas[j] = best_models[[j]]$gamma
+    
+    predictions = predict(best_models[[j]], data[validation,])
+    tables[[j]] = table(predict = predictions, truth = output[validation])
+    accuracies[j] = (tables[[j]][1,1] + tables[[j]][2,2])/sum(tables[[j]])
+    
+  }
+  l = list(models,tables,accuracies,costs,gammas)
+  return(l)
+}
+result2 = bootstrap5(autism, autism$Class.ASD, variables, 50, 70)
+accuracy2 = mean(result2[[3]])
+```
+
+For the radial kernel, the accuracy, best cost, and gamma values are as follows:  
+
+```{r}
+accuracy2 
+cost=mean(result2[[4]])
+cost
+gamma=mean(result2[[5]])
+gamma 
+```
+
+The Radial kernel bootstrap accuracy rate is 1 with the best cost value equal to 9 and gamma value equal to 0.1.  
+
+# Comparing Models:  
+
+```{r}
+accuraciess = data.frame(matrix(ncol = 0, nrow = 1))
+accuraciess$tree = tree_accuracies[1]
+accuraciess$random_forest = accuracyy
+accuraciess$linear = accuracy
+accuraciess$polynomial2 = accuracies[1]
+accuraciess$polynomial3 = accuracies[2]
+accuraciess$polynomial4 = accuracies[3]
+accuraciess$polynomial5 = accuracies[4]
+accuraciess$radial = accuracy2
+accuraciess
+```
+
+
+All of the models have the same accuracy. All of the svm models, as well as the random forest and tree models, have the same accuracy of one.  
+
+# My comments on the results:-  
+
+As we can see from all the model results, we obtained an accuracy of 1 on almost every model... which of course is not good as we can never truly achieve 100% accuracy on anything. Initially we might think this is due to an imbalanced data set; however, I tested that (in data visualization) and found that the class ASD has a 70:30 ratio which is hardly above slightly imbalanced and it is not enough to explain the 100% accuracy. Another reason could be due to bootstrapping that may have caused over-fitting of the train. Additionally, due to these results, I was not able to generate a proper ROC curve and get the AUC.
